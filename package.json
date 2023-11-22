@@ -1,0 +1,18 @@
+{
+  "name": "noibat",
+  "version": "1.0.0",
+  "description": "A voice activated music bot for Discord that supports the YouTube API",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "eslint": "eslint src"
+  },
+  "author": "CorruptedSpoon",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.54.0"
+  }
+}
