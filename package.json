@@ -1,18 +1,33 @@
 {
-  "name": "noibat",
+  "name": "noibat-music-bot",
   "version": "1.0.0",
-  "description": "A voice activated music bot for Discord that supports the YouTube API",
-  "main": "index.js",
+  "description": "A Discord music bot that plays YouTube audio",
+  "main": "bot.js",
   "scripts": {
-    "start": "node index.js",
-    "eslint": "eslint src"
+    "start": "node bot.js",
+    "dev": "nodemon bot.js"
   },
-  "author": "CorruptedSpoon",
-  "license": "MIT",
   "dependencies": {
-    "discord.js": "^14.14.1"
+    "@discordjs/voice": "^0.16.1",
+    "@distube/ytdl-core": "^4.13.5",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "ffmpeg-static": "^5.2.0",
+    "libsodium-wrappers": "^0.7.11",
+    "youtube-sr": "^4.3.4"
   },
   "devDependencies": {
-    "eslint": "^8.54.0"
-  }
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "music",
+    "youtube"
+  ],
+  "author": "",
+  "license": "MIT"
 }
