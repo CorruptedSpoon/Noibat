@@ -5,3 +5,6 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 *.log
+
+# yt-dlp binary (auto-downloaded)
+yt-dlp.exe

@@ -1,8 +1,22 @@
 const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice');
-const ytdl = require('@distube/ytdl-core');
-const YouTube = require('youtube-sr').default;
+const YTDlpWrap = require('yt-dlp-wrap').default;
+const path = require('path');
+const ytdl = new YTDlpWrap(path.join(__dirname, 'yt-dlp.exe'));
+const ytSearch = require('yt-search');
 require('dotenv').config();
+
+// Download yt-dlp binary on startup if not exists
+(async () => {
+    try {
+        await YTDlpWrap.downloadFromGithub(path.join(__dirname, 'yt-dlp.exe'));
+        console.log('yt-dlp binary ready');
+    } catch (err) {
+        if (!err.message.includes('File already exists')) {
+            console.error('Error downloading yt-dlp:', err);
+        }
+    }
+})();
 
 const client = new Client({
     intents: [
@@ -34,7 +48,7 @@ class MusicQueue {
 }
 
 client.once('clientReady', async () => {
-    console.log(`🎵 ${client.user.tag} is online and ready to play music!`);
+    console.log(`${client.user.tag} is online and ready to play music!`);
     
     const commands = [
         new SlashCommandBuilder()
@@ -104,51 +118,52 @@ async function handleSlashCommand(interaction) {
         
         try {
             // Check if it's a playlist URL
-            const isPlaylistUrl = query.includes('list=') && query.includes('youtube.com');
-            
-            if (isPlaylistUrl) {
+            const isPlaylist = query.includes('list=');
+
+            if (isPlaylist) {
                 await interaction.editReply('🔄 Loading playlist... This may take a moment.');
-                
-                const playlist = await YouTube.getPlaylist(query);
-                const playlistVideos = await playlist.fetch();
-                
-                if (!playlistVideos || playlistVideos.videos.length === 0) {
+
+                // Extract playlist info using yt-dlp with options for playlists
+                const playlistInfo = await ytdl.execPromise([
+                    query,
+                    '--flat-playlist',
+                    '--dump-single-json',
+                    '--playlist-end', '50',
+                    '--no-warnings'
+                ]).then(output => JSON.parse(output));
+
+                if (!playlistInfo.entries || playlistInfo.entries.length === 0) {
                     return interaction.editReply('❌ No videos found in this playlist!');
                 }
-                
+
                 const songs = [];
-                let loadedCount = 0;
-                let errorCount = 0;
-                
-                for (const video of playlistVideos.videos.slice(0, 50)) { // Limit to 50 songs to prevent spam
-                    try {
-                        const songInfo = await ytdl.getInfo(video.url);
-                        songs.push({
-                            title: songInfo.videoDetails.title,
-                            url: songInfo.videoDetails.video_url,
-                            duration: songInfo.videoDetails.lengthSeconds,
-                            thumbnail: songInfo.videoDetails.thumbnails[0]?.url,
-                            requestedBy: interaction.user
-                        });
-                        loadedCount++;
-                    } catch (error) {
-                        console.error(`Error loading video ${video.title}:`, error);
-                        errorCount++;
-                    }
+                const entries = playlistInfo.entries.slice(0, 50); // Limit to 50 songs
+
+                for (const video of entries) {
+                    // Build full YouTube URL from video ID
+                    const videoUrl = video.url || `https://www.youtube.com/watch?v=${video.id}`;
+
+                    songs.push({
+                        title: video.title || 'Unknown Title',
+                        url: videoUrl,
+                        duration: video.duration || 0,
+                        thumbnail: video.thumbnail,
+                        requestedBy: interaction.user
+                    });
                 }
-                
+
                 if (songs.length === 0) {
                     return interaction.editReply('❌ Could not load any songs from this playlist!');
                 }
-                
+
                 // Add all songs to queue
                 if (!guildQueue) {
                     const queueContract = new MusicQueue();
                     queueContract.textChannel = interaction.channel;
                     queue.set(interaction.guild.id, queueContract);
-                    
+
                     queueContract.songs.push(...songs);
-                    
+
                     try {
                         const connection = joinVoiceChannel({
                             channelId: interaction.member.voice.channel.id,
@@ -172,7 +187,7 @@ async function handleSlashCommand(interaction) {
                                     queueContract.previousSongs.shift();
                                 }
                             }
-                            
+
                             if (queueContract.songs.length > 0) {
                                 playSong(interaction.guild, queueContract.songs[0], false);
                             } else {
@@ -188,8 +203,7 @@ async function handleSlashCommand(interaction) {
                         });
 
                         playSong(interaction.guild, queueContract.songs[0]);
-                        const errorText = errorCount > 0 ? ` (${errorCount} songs failed to load)` : '';
-                        interaction.editReply(`🎵 **${playlist.title}** playlist loaded! Added ${loadedCount} songs to queue${errorText}`);
+                        interaction.editReply(`🎵 **${playlistInfo.title || 'Playlist'}** loaded! Added ${songs.length} songs to queue`);
                     } catch (error) {
                         console.error('Error connecting to voice channel:', error);
                         queue.delete(interaction.guild.id);
@@ -197,36 +211,49 @@ async function handleSlashCommand(interaction) {
                     }
                 } else {
                     guildQueue.songs.push(...songs);
-                    const errorText = errorCount > 0 ? ` (${errorCount} songs failed to load)` : '';
-                    interaction.editReply(`🎵 **${playlist.title}** playlist loaded! Added ${loadedCount} songs to queue${errorText}`);
+                    interaction.editReply(`🎵 **${playlistInfo.title || 'Playlist'}** loaded! Added ${songs.length} songs to queue`);
                 }
                 return;
             }
-            
+
+            // Handle single song/video
             let songInfo;
-            let videoUrl;
-            
-            if (ytdl.validateURL(query)) {
-                songInfo = await ytdl.getInfo(query);
-                videoUrl = query;
-            } else {
-                const searchResults = await YouTube.search(query, { limit: 1, type: 'video' });
-                if (!searchResults || searchResults.length === 0) {
+            let videoUrl = query;
+
+            // Check if it's a direct URL or search query
+            if (!query.includes('youtube.com') && !query.includes('youtu.be')) {
+                // Search for the song
+                const searchResults = await ytSearch(query);
+                if (!searchResults || !searchResults.videos || searchResults.videos.length === 0) {
                     return interaction.editReply('❌ No search results found!');
                 }
-                
-                const firstResult = searchResults[0];
-                videoUrl = firstResult.url;
-                songInfo = await ytdl.getInfo(videoUrl);
+
+                const firstVideo = searchResults.videos[0];
+                videoUrl = firstVideo.url;
+
+                const song = {
+                    title: firstVideo.title,
+                    url: firstVideo.url,
+                    duration: firstVideo.seconds,
+                    thumbnail: firstVideo.thumbnail,
+                    requestedBy: interaction.user
+                };
+                songInfo = song;
+            } else {
+                // Direct YouTube URL - get info using yt-dlp
+                const info = await ytdl.getVideoInfo(query);
+
+                const song = {
+                    title: info.title,
+                    url: query,
+                    duration: info.duration,
+                    thumbnail: info.thumbnail,
+                    requestedBy: interaction.user
+                };
+                songInfo = song;
             }
 
-            const song = {
-                title: songInfo.videoDetails.title,
-                url: songInfo.videoDetails.video_url,
-                duration: songInfo.videoDetails.lengthSeconds,
-                thumbnail: songInfo.videoDetails.thumbnails[0]?.url,
-                requestedBy: interaction.user
-            };
+            const song = songInfo;
 
             if (!guildQueue) {
                 const queueContract = new MusicQueue();
@@ -785,13 +812,55 @@ async function playSong(guild, song, sendEmbed = true) {
     }
 
     try {
-        const stream = ytdl(song.url, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            highWaterMark: 1 << 25
+        // Get stream URL first, then use ffmpeg to stream it
+        const info = await ytdl.getVideoInfo(song.url);
+
+        // Find best audio format
+        let formatUrl;
+        if (info.formats) {
+            const audioFormat = info.formats.find(f =>
+                f.acodec && f.acodec !== 'none' && !f.vcodec
+            ) || info.formats.find(f => f.acodec && f.acodec !== 'none');
+
+            formatUrl = audioFormat?.url;
+        }
+
+        if (!formatUrl) {
+            formatUrl = info.url;
+        }
+
+        // Use ffmpeg to stream the URL
+        const { spawn } = require('child_process');
+        const ffmpegPath = require('ffmpeg-static');
+        const ffmpeg = spawn(ffmpegPath, [
+            '-reconnect', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '5',
+            '-i', formatUrl,
+            '-analyzeduration', '0',
+            '-loglevel', '0',
+            '-f', 's16le',
+            '-ar', '48000',
+            '-ac', '2',
+            'pipe:1'
+        ], {
+            windowsHide: true
         });
 
-        const resource = createAudioResource(stream);
+        ffmpeg.on('error', (err) => {
+            console.error('ffmpeg error:', err);
+        });
+
+        const resource = createAudioResource(ffmpeg.stdout, {
+            inputType: 'raw',
+            inlineVolume: true
+        });
+
+        // Debug: Monitor player state changes
+        guildQueue.player.on('stateChange', (oldState, newState) => {
+            console.log(`Player: ${oldState.status} -> ${newState.status}`);
+        });
+
         guildQueue.player.play(resource);
         guildQueue.isPlaying = true;
         guildQueue.isPaused = false;
